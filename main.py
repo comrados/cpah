@@ -5,14 +5,20 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from datasets.dataset import Dataset
 from config import opt
-from models.dis_model import DisModel
-from models.gen_model import GenModel
+from models.CPAH import CPAH
 from torch.optim import Adam
 from utils import calc_map_k, pr_curve, p_top_k, Visualizer, write_pickle, pr_curve2
 from datasets.data_handler import load_data, load_pretrain_model
 import time
 import pickle
 import numpy as np
+
+
+"""
+Xie, De, et al. "Multi-Task Consistency-Preserving Adversarial Hashing for Cross-Modal Retrieval."
+IEEE Transactions on Image Processing 29 (2020): 3626-3637.
+DOI: 10.1109/TMM.2020.2969792
+"""
 
 
 def train(**kwargs):
@@ -44,26 +50,26 @@ def train(**kwargs):
     query_labels = query_labels.to(opt.device)
     db_labels = db_labels.to(opt.device)
 
-    generator = GenModel(opt.image_dim, opt.text_dim, opt.hidden_dim, opt.bit).to(opt.device)
+    model = CPAH(opt.image_dim, opt.text_dim, opt.hidden_dim, opt.bit, opt.num_label).to(opt.device)
 
-    discriminator = DisModel(opt.hidden_dim, opt.num_label).to(opt.device)
+    # discriminator = DisModel(opt.hidden_dim, opt.num_label).to(opt.device)
 
     optimizer_gen = Adam([
-        # {'params': generator.cnn_f.parameters()},     ## froze parameters of cnn_f
-        {'params': generator.image_module.parameters()},
-        {'params': generator.text_module.parameters()},
-        {'params': generator.hash_module.parameters()},
-        {'params': generator.mask_module.parameters()},
+        {'params': model.image_module.parameters()},
+        {'params': model.text_module.parameters()},
+        {'params': model.hash_module.parameters()},
+        {'params': model.mask_module.parameters()},
     ], lr=opt.lr, weight_decay=0.0005)
 
     optimizer_dis = {
-        'feature': Adam(discriminator.feature_dis.parameters(), lr=opt.lr, betas=(0.5, 0.9), weight_decay=0.0001),
-        'cons': Adam(discriminator.consistency_dis.parameters(), lr=opt.lr, betas=(0.5, 0.9), weight_decay=0.0001),
-        'class': Adam(discriminator.classifier.parameters(), lr=opt.lr, betas=(0.5, 0.9), weight_decay=0.0001)
+        'feature': Adam(model.feature_dis.parameters(), lr=opt.lr, betas=(0.5, 0.9), weight_decay=0.0001),
+        'cons': Adam(model.consistency_dis.parameters(), lr=opt.lr, betas=(0.5, 0.9), weight_decay=0.0001),
+        'class': Adam(model.classifier.parameters(), lr=opt.lr, betas=(0.5, 0.9), weight_decay=0.0001)
     }
 
-
     #tri_loss = TripletLoss(opt, reduction='sum')
+    loss_bce = torch.nn.BCELoss(reduction='sum')
+    loss_ce = torch.nn.CrossEntropyLoss(reduction='sum')
 
     loss = []
     losses = []
@@ -80,8 +86,8 @@ def train(**kwargs):
     mapt2t_list = []
     train_times = []
 
-    B_i = torch.randn(opt.training_size, opt.bit).sign().to(opt.device)
-    B_t = B_i
+    B = torch.randn(opt.training_size, opt.bit).sign().to(opt.device)
+
     H_i = torch.zeros(opt.training_size, opt.bit).to(opt.device)
     H_t = torch.zeros(opt.training_size, opt.bit).to(opt.device)
 
@@ -97,29 +103,94 @@ def train(**kwargs):
 
             batch_size = len(ind)
 
-            h_img, h_txt, f_rc_img, f_rc_txt, f_rp_img, f_rp_txt = generator(imgs, txt)
+            h_img, h_txt, f_rc_img, f_rc_txt, f_rp_img, f_rp_txt = model(imgs, txt)
 
-            ############################################################## TODO
+            B[ind, :] = (0.5 * (h_img + h_txt)).sign()
+
+            ###################################
+            # train discriminator. CPAH paper: (5)
+            ###################################
+            # IMG - real, TXT - fake
+            # train with real (IMG)
+            optimizer_dis['feature'].zero_grad()
+
+            d_real = model.dis_D(f_rc_img.detach())
+            d_real = -opt.gamma * torch.log(torch.sigmoid(d_real)).mean()
+            d_real.backward()
+
+            # train with fake (TXT)
+            d_fake = model.dis_D(f_rc_txt.detach())
+            d_fake = -opt.gamma * torch.log(torch.ones(batch_size).to(opt.device) - torch.sigmoid(d_fake)).mean()
+            d_fake.backward()
+
+            # train with gradient penalty (GP)
+            # interpolate real and fake data
+            alpha = torch.rand(batch_size, opt.hidden_dim).to(opt.device)
+            interpolates = alpha * f_rc_img.detach() + (1 - alpha) * f_rc_txt.detach()
+            interpolates.requires_grad_()
+            disc_interpolates = model.dis_D(interpolates)
+            # get gradients with respect to inputs
+            gradients = autograd.grad(outputs=disc_interpolates, inputs=interpolates,
+                                      grad_outputs=torch.ones(disc_interpolates.size()).to(opt.device),
+                                      create_graph=True, retain_graph=True, only_inputs=True)[0]
+            gradients = gradients.view(gradients.size(0), -1)
+            # calculate penalty
+            feature_gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * 10  # 10 is GP hyperparameter
+            feature_gradient_penalty.backward()
+
+            optimizer_dis['feature'].step()
+
+            ###################################
+            # train generator
+            ###################################
+
+            # adversarial loss, CPAH paper: (6)
+            # IMG is fake now
+            loss_adver = -torch.log(torch.sigmoid(model.dis_D(f_rc_img))).mean()  # don't detach from graph
+
+            # consistency classification loss, CPAH paper: (7)
+            f_r = torch.vstack([f_rc_img, f_rc_txt, f_rp_img, f_rp_txt])
+            l_r = [1] * opt.batch_size * 2 + [0] * opt.batch_size + [2] * opt.batch_size  # labels
+            l_r = torch.tensor(l_r).to(opt.device)
+            loss_consistency_class = loss_ce(f_r, l_r)
+
+            # classification loss, CPAH paper: (8)
+            l_f_rc_img = model.dis_classify(f_rc_img, 'img')
+            l_f_rc_txt = model.dis_classify(f_rc_txt, 'txt')
+            # l_f_rp_img = model.dis_classify(f_rp_img, 'img')
+            # l_f_rp_txt = model.dis_classify(f_rp_txt, 'txt')
+            loss_class = loss_bce(l_f_rc_img, labels) + loss_bce(l_f_rc_txt, labels)
+
+            # pairwise loss, CPAH paper: (10)
+            S = (labels.mm(labels.T) > 0).float()
+            theta = 0.5 * (h_img.mm(h_img.T) + h_txt.mm(h_txt.T))  # not completely sure
+            loss_pairwise = -torch.sum(S*theta - torch.log(1 + torch.exp(theta)))
+
+            # quantization loss, CPAH paper: (11)
+            loss_quant = torch.sum(torch.pow(B[ind, :] - h_img, 2)) + torch.sum(torch.pow(B[ind, :] - h_txt, 2))
+
+
+            ############################################################## TODO calc losses, use backprop
 
             H_i[ind, :] = h_i.data
             H_t[ind, :] = h_t.data
-            h_t_detach = generator.generate_txt_code(txt)
+            h_t_detach = model.generate_txt_code(txt)
 
             #####
             # train feature discriminator
             #####
-            D_real_feature = discriminator.dis_feature(f_i.detach())
-            D_real_feature = -opt.gamma * torch.log(torch.sigmoid(D_real_feature)).mean()
+            d_real = discriminator.dis_feature(f_i.detach())
+            d_real = -opt.gamma * torch.log(torch.sigmoid(d_real)).mean()
             # D_real_feature = -D_real_feature.mean()
             optimizer_dis['feature'].zero_grad()
-            D_real_feature.backward()
+            d_real.backward()
 
             # train with fake
-            D_fake_feature = discriminator.dis_feature(f_t.detach())
-            D_fake_feature = -opt.gamma * torch.log(
-                torch.ones(batch_size).to(opt.device) - torch.sigmoid(D_fake_feature)).mean()
+            d_fake = discriminator.dis_feature(f_t.detach())
+            d_fake = -opt.gamma * torch.log(
+                torch.ones(batch_size).to(opt.device) - torch.sigmoid(d_fake)).mean()
             # D_fake_feature = D_fake_feature.mean()
-            D_fake_feature.backward()
+            d_fake.backward()
 
             # train with gradient penalty (GP)
             # interpolate real and fake data
@@ -213,7 +284,7 @@ def train(**kwargs):
 
         # validate
         if opt.valid and (epoch + 1) % opt.valid_freq == 0:
-            mapi2t, mapt2i, mapi2i, mapt2t = valid(generator, i_query_dataloader, i_db_dataloader, t_query_dataloader,
+            mapi2t, mapt2i, mapi2i, mapt2t = valid(model, i_query_dataloader, i_db_dataloader, t_query_dataloader,
                                                    t_db_dataloader, query_labels, db_labels)
             print(
                 'Epoch: {:4d}/{:4d}, validation MAP: MAP(i->t) = {:3.4f}, MAP(t->i) = {:3.4f}, MAP(i->i) = {:3.4f}, MAP(t->t) = {:3.4f}'.format(
@@ -231,7 +302,7 @@ def train(**kwargs):
                 max_mapi2i = mapi2i
                 max_mapt2t = mapt2t
                 max_average = 0.5 * (mapi2t + mapt2i)
-                save_model(generator)
+                save_model(model)
                 path = 'checkpoints/' + opt.dataset + '_' + str(opt.bit) + str(opt.proc)
                 with torch.cuda.device(opt.device):
                     torch.save([P_i, P_t], os.path.join(path, 'feature_maps_i_t.pth'))
@@ -250,7 +321,7 @@ def train(**kwargs):
             pass
 
     if not opt.valid:
-        save_model(generator)
+        save_model(model)
 
     time_elapsed = time.time() - since
     print('\n   Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
@@ -259,7 +330,7 @@ def train(**kwargs):
         print('   Max MAP: MAP(i->t) = {:3.4f}, MAP(t->i) = {:3.4f}, MAP(i->i) = {:3.4f}, MAP(t->t) = {:3.4f}'.format(
             max_mapi2t, max_mapt2i, max_mapi2i, max_mapt2t))
     else:
-        mapi2t, mapt2i, mapi2i, mapt2t = valid(generator, i_query_dataloader, i_db_dataloader, t_query_dataloader,
+        mapi2t, mapt2i, mapi2i, mapt2t = valid(model, i_query_dataloader, i_db_dataloader, t_query_dataloader,
                                                t_db_dataloader, query_labels, db_labels)
         print('   Max MAP: MAP(i->t) = {:3.4f}, MAP(t->i) = {:3.4f}, MAP(i->i) = {:3.4f}, MAP(t->t) = {:3.4f}'.format(
             mapi2t, mapt2i, mapi2i, mapt2t))

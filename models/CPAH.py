@@ -2,14 +2,20 @@ from torch import nn
 import torch
 import os
 
+"""
+Xie, De, et al. "Multi-Task Consistency-Preserving Adversarial Hashing for Cross-Modal Retrieval."
+IEEE Transactions on Image Processing 29 (2020): 3626-3637.
+DOI: 10.1109/TMM.2020.2969792
+"""
 
-class GenModel(nn.Module):
-    def __init__(self, image_dim, text_dim, hidden_dim, hash_dim):
-        super(GenModel, self).__init__()
+class CPAH(nn.Module):
+    def __init__(self, image_dim, text_dim, hidden_dim, hash_dim, label_dim):
+        super(CPAH, self).__init__()
         self.image_dim = image_dim
         self.text_dim = text_dim
         self.hidden_dim = hidden_dim
         self.hash_dim = hash_dim
+        self.label_dim = label_dim
 
         class Unsqueezer(nn.Module):
             """
@@ -41,11 +47,11 @@ class GenModel(nn.Module):
         self.hash_module = nn.ModuleDict({
             'img': nn.Sequential(
                 nn.Linear(512, hash_dim, bias=True),
-                nn.Sigmoid()
+                nn.Tanh()
             ),
             'txt': nn.Sequential(
                 nn.Linear(512, hash_dim, bias=True),
-                nn.Sigmoid()
+                nn.Tanh()
             ),
         })
 
@@ -58,6 +64,32 @@ class GenModel(nn.Module):
             'txt': nn.Sequential(
                 Unsqueezer(),
                 nn.Conv1d(1, hidden_dim, kernel_size=(hidden_dim, 1), stride=(1, 1)),
+                nn.Sigmoid()
+            ),
+        })
+
+        # D (consistency adversarial loss)
+        self.feature_dis = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 8, bias=True),
+            nn.ReLU(True),
+            nn.Linear(hidden_dim // 8, 1, bias=True)
+        )
+
+        # C (consistency classification)
+        self.consistency_dis = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 8, bias=True),
+            nn.ReLU(True),
+            nn.Linear(hidden_dim // 8, 3, bias=True)
+        )
+
+        # classification
+        self.classifier = nn.ModuleDict({
+            'img': nn.Sequential(
+                nn.Linear(hidden_dim, label_dim, bias=True),
+                nn.Sigmoid()
+            ),
+            'txt': nn.Sequential(
+                nn.Linear(hidden_dim, label_dim, bias=True),
                 nn.Sigmoid()
             ),
         })
@@ -118,3 +150,15 @@ class GenModel(nn.Module):
             with torch.cuda.device(cuda_device):
                 torch.save(self.state_dict(), os.path.join(path, name))
         return name
+
+    def dis_D(self, f):
+        score = self.feature_dis(f)
+        return score.squeeze()
+
+    def dis_C(self, f):
+        res = self.consistency_dis(f)
+        return res.squeeze()
+
+    def dis_classify(self, f, modality):
+        res = self.classifier[modality](f)
+        return res.squeeze()
