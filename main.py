@@ -163,7 +163,8 @@ def train(**kwargs):
 
             # pairwise loss, CPAH paper: (10)
             S = (labels.mm(labels.T) > 0).float()
-            theta = 0.5 * (h_img.mm(h_img.T) + h_txt.mm(h_txt.T))  # not completely sure
+            # theta = 0.5 * (h_img.mm(h_img.T) + h_txt.mm(h_txt.T))
+            theta = 0.5 * (h_img.mm(h_txt.T) + h_txt.mm(h_img.T))  # not completely sure
             loss_pairwise = -torch.sum(S*theta - torch.log(1 + torch.exp(theta)))
 
             # quantization loss, CPAH paper: (11)
