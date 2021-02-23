@@ -24,14 +24,8 @@ class Default(object):
     # device = 'cpu'
 
     # hyper-parameters
-    alpha = 0.1
-    gamma = 20
-    beta = 0.01
-    mu = 0.00001
-    lamb = 1
-
-    margin = 0.4
-    dropout = True
+    alpha = 0.1  # from paper's Fig. 4
+    beta = 1  # from paper's Fig. 4
 
     proc = None
 

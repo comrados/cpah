@@ -11,6 +11,7 @@ DOI: 10.1109/TMM.2020.2969792
 class CPAH(nn.Module):
     def __init__(self, image_dim, text_dim, hidden_dim, hash_dim, label_dim):
         super(CPAH, self).__init__()
+        self.module_name = 'CPAH'
         self.image_dim = image_dim
         self.text_dim = text_dim
         self.hidden_dim = hidden_dim
@@ -117,22 +118,24 @@ class CPAH(nn.Module):
         return h_img, h_txt, f_rc_img, f_rc_txt, f_rp_img, f_rp_txt
 
     def get_mask(self, x, modality):
-        return self.mask_module[modality](x).squeeze()
+        mask = self.mask_module[modality](x).squeeze()
+        return mask
 
     def get_hash(self, x, modality):
-        return self.hash_module[modality](x).squeeze()
+        hash = self.hash_module[modality](x).squeeze()
+        return hash
 
     def generate_img_code(self, i):
         # i = self.cnn_f(i).squeeze()   ## if use 4096-dims feature, pass
         f_i = self.image_module(i)
 
-        code = self.hash_module['image'](f_i.detach()).reshape(-1, self.output_dim)
+        code = self.hash_module['img'](f_i.detach()).reshape(-1, self.hash_dim)
         return code
 
     def generate_txt_code(self, t):
         f_t = self.text_module(t)
 
-        code = self.hash_module['text'](f_t.detach()).reshape(-1, self.output_dim)
+        code = self.hash_module['txt'](f_t.detach()).reshape(-1, self.hash_dim)
         return code
 
     def load(self, path, use_gpu=False):
