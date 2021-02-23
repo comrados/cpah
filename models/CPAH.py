@@ -118,25 +118,18 @@ class CPAH(nn.Module):
         return h_img, h_txt, f_rc_img, f_rc_txt, f_rp_img, f_rp_txt
 
     def get_mask(self, x, modality):
-        mask = self.mask_module[modality](x).squeeze()
-        return mask
+        return self.mask_module[modality](x).squeeze()
 
     def get_hash(self, x, modality):
-        hash = self.hash_module[modality](x).squeeze()
-        return hash
+        return self.hash_module[modality](x).squeeze()
 
     def generate_img_code(self, i):
-        # i = self.cnn_f(i).squeeze()   ## if use 4096-dims feature, pass
         f_i = self.image_module(i)
-
-        code = self.hash_module['img'](f_i.detach()).reshape(-1, self.hash_dim)
-        return code
+        return self.hash_module['img'](f_i.detach())
 
     def generate_txt_code(self, t):
         f_t = self.text_module(t)
-
-        code = self.hash_module['txt'](f_t.detach()).reshape(-1, self.hash_dim)
-        return code
+        return self.hash_module['txt'](f_t.detach())
 
     def load(self, path, use_gpu=False):
         if not use_gpu:
@@ -155,13 +148,10 @@ class CPAH(nn.Module):
         return name
 
     def dis_D(self, f):
-        score = self.feature_dis(f)
-        return score.squeeze()
+        return self.feature_dis(f).squeeze()
 
     def dis_C(self, f):
-        res = self.consistency_dis(f)
-        return res.squeeze()
+        return self.consistency_dis(f).squeeze()
 
     def dis_classify(self, f, modality):
-        res = self.classifier[modality](f)
-        return res.squeeze()
+        return self.classifier[modality](f).squeeze()

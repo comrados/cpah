@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import h5py
 import scipy.io as scio
@@ -67,7 +66,4 @@ def duplicate_data(data, n):
             idx += 1
     return new_data
 
-
-def load_pretrain_model(path):
-    return scio.loadmat(path)
 

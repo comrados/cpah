@@ -7,11 +7,9 @@ from datasets.dataset import Dataset
 from config import opt
 from models.CPAH import CPAH
 from torch.optim import Adam
-from utils import calc_map_k, pr_curve, p_top_k, Visualizer, write_pickle, pr_curve2
-from datasets.data_handler import load_data, load_pretrain_model
+from utils import calc_map_k, pr_curve, p_top_k, write_pickle, pr_curve2
+from datasets.data_handler import load_data
 import time
-import pickle
-import numpy as np
 
 
 """
@@ -266,79 +264,77 @@ def test(**kwargs):
     else:
         opt.device = torch.device('cpu')
 
-    # pretrain_model = load_pretrain_model(opt.pretrain_model_path)
+    with torch.no_grad():
+        model = CPAH(opt.image_dim, opt.text_dim, opt.hidden_dim, opt.bit, opt.num_label).to(opt.device)
 
-    # generator = GEN(opt.image_dim, opt.text_dim, opt.hidden_dim, opt.bit, opt.num_label).to(opt.device)
-    model = CPAH(opt.image_dim, opt.text_dim, opt.hidden_dim, opt.bit, opt.num_label).to(opt.device)
+        path = 'checkpoints/' + opt.dataset + '_' + str(opt.bit) + str(opt.proc)
+        load_model(model, path)
 
-    path = 'checkpoints/' + opt.dataset + '_' + str(opt.bit) + str(opt.proc)
-    load_model(model, path)
+        model.eval()
 
-    model.eval()
+        images, tags, labels = load_data(opt.data_path, opt.dataset)
 
-    images, tags, labels = load_data(opt.data_path, opt.dataset)
+        i_query_data = Dataset(opt, images, tags, labels, test='image.query')
+        i_db_data = Dataset(opt, images, tags, labels, test='image.db')
+        t_query_data = Dataset(opt, images, tags, labels, test='text.query')
+        t_db_data = Dataset(opt, images, tags, labels, test='text.db')
 
-    i_query_data = Dataset(opt, images, tags, labels, test='image.query')
-    i_db_data = Dataset(opt, images, tags, labels, test='image.db')
-    t_query_data = Dataset(opt, images, tags, labels, test='text.query')
-    t_db_data = Dataset(opt, images, tags, labels, test='text.db')
+        i_query_dataloader = DataLoader(i_query_data, opt.batch_size, shuffle=False)
+        i_db_dataloader = DataLoader(i_db_data, opt.batch_size, shuffle=False)
+        t_query_dataloader = DataLoader(t_query_data, opt.batch_size, shuffle=False)
+        t_db_dataloader = DataLoader(t_db_data, opt.batch_size, shuffle=False)
 
-    i_query_dataloader = DataLoader(i_query_data, opt.batch_size, shuffle=False)
-    i_db_dataloader = DataLoader(i_db_data, opt.batch_size, shuffle=False)
-    t_query_dataloader = DataLoader(t_query_data, opt.batch_size, shuffle=False)
-    t_db_dataloader = DataLoader(t_db_data, opt.batch_size, shuffle=False)
+        qBX = generate_img_code(model, i_query_dataloader, opt.query_size)
+        qBY = generate_txt_code(model, t_query_dataloader, opt.query_size)
+        rBX = generate_img_code(model, i_db_dataloader, opt.db_size)
+        rBY = generate_txt_code(model, t_db_dataloader, opt.db_size)
 
-    qBX = generate_img_code(model, i_query_dataloader, opt.query_size)
-    qBY = generate_txt_code(model, t_query_dataloader, opt.query_size)
-    rBX = generate_img_code(model, i_db_dataloader, opt.db_size)
-    rBY = generate_txt_code(model, t_db_dataloader, opt.db_size)
+        query_labels, db_labels = i_query_data.get_labels()
+        query_labels = query_labels.to(opt.device)
+        db_labels = db_labels.to(opt.device)
 
-    query_labels, db_labels = i_query_data.get_labels()
-    query_labels = query_labels.to(opt.device)
-    db_labels = db_labels.to(opt.device)
+        #K = [1, 10, 100, 1000]
+        #p_top_k(qBX, rBY, query_labels, db_labels, K, tqdm_label='I2T')
+        # pr_curve2(qBY, rBX, query_labels, db_labels)
 
-    K = [1, 10, 100, 1000]
-    p_top_k(qBX, rBY, query_labels, db_labels, K, tqdm_label='I2T')
-    # pr_curve2(qBY, rBX, query_labels, db_labels)
+        p_i2t, r_i2t = pr_curve(qBX, rBY, query_labels, db_labels, tqdm_label='I2T')
+        p_t2i, r_t2i = pr_curve(qBY, rBX, query_labels, db_labels, tqdm_label='T2I')
+        p_i2i, r_i2i = pr_curve(qBX, rBX, query_labels, db_labels, tqdm_label='I2I')
+        p_t2t, r_t2t = pr_curve(qBY, rBY, query_labels, db_labels, tqdm_label='T2T')
 
-    p_i2t, r_i2t = pr_curve(qBX, rBY, query_labels, db_labels, tqdm_label='I2T')
-    p_t2i, r_t2i = pr_curve(qBY, rBX, query_labels, db_labels, tqdm_label='T2I')
-    p_i2i, r_i2i = pr_curve(qBX, rBX, query_labels, db_labels, tqdm_label='I2I')
-    p_t2t, r_t2t = pr_curve(qBY, rBY, query_labels, db_labels, tqdm_label='T2T')
+        K = [1, 10, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+        pk_i2t = p_top_k(qBX, rBY, query_labels, db_labels, K, tqdm_label='I2T')
+        pk_t2i = p_top_k(qBY, rBX, query_labels, db_labels, K, tqdm_label='T2I')
+        pk_i2i = p_top_k(qBX, rBX, query_labels, db_labels, K, tqdm_label='I2I')
+        pk_t2t = p_top_k(qBY, rBY, query_labels, db_labels, K, tqdm_label='T2T')
 
-    K = [1, 10, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
-    pk_i2t = p_top_k(qBX, rBY, query_labels, db_labels, K, tqdm_label='I2T')
-    pk_t2i = p_top_k(qBY, rBX, query_labels, db_labels, K, tqdm_label='T2I')
-    pk_i2i = p_top_k(qBX, rBX, query_labels, db_labels, K, tqdm_label='I2I')
-    pk_t2t = p_top_k(qBY, rBY, query_labels, db_labels, K, tqdm_label='T2T')
+        mapi2t = calc_map_k(qBX, rBY, query_labels, db_labels)
+        mapt2i = calc_map_k(qBY, rBX, query_labels, db_labels)
+        mapi2i = calc_map_k(qBX, rBX, query_labels, db_labels)
+        mapt2t = calc_map_k(qBY, rBY, query_labels, db_labels)
 
-    mapi2t = calc_map_k(qBX, rBY, query_labels, db_labels)
-    mapt2i = calc_map_k(qBY, rBX, query_labels, db_labels)
-    mapi2i = calc_map_k(qBX, rBX, query_labels, db_labels)
-    mapt2t = calc_map_k(qBY, rBY, query_labels, db_labels)
+        pr_dict = {'pi2t': p_i2t.cpu().numpy(), 'ri2t': r_i2t.cpu().numpy(),
+                   'pt2i': p_t2i.cpu().numpy(), 'rt2i': r_t2i.cpu().numpy(),
+                   'pi2i': p_i2i.cpu().numpy(), 'ri2i': r_i2i.cpu().numpy(),
+                   'pt2t': p_t2t.cpu().numpy(), 'rt2t': r_t2t.cpu().numpy()}
 
-    pr_dict = {'pi2t': p_i2t.cpu().numpy(), 'ri2t': r_i2t.cpu().numpy(),
-               'pt2i': p_t2i.cpu().numpy(), 'rt2i': r_t2i.cpu().numpy(),
-               'pi2i': p_i2i.cpu().numpy(), 'ri2i': r_i2i.cpu().numpy(),
-               'pt2t': p_t2t.cpu().numpy(), 'rt2t': r_t2t.cpu().numpy()}
+        pk_dict = {'k': K,
+                   'pki2t': pk_i2t.cpu().numpy(),
+                   'pkt2i': pk_t2i.cpu().numpy(),
+                   'pki2i': pk_i2i.cpu().numpy(),
+                   'pkt2t': pk_t2t.cpu().numpy()}
 
-    pk_dict = {'k': K,
-               'pki2t': pk_i2t.cpu().numpy(),
-               'pkt2i': pk_t2i.cpu().numpy(),
-               'pki2i': pk_i2i.cpu().numpy(),
-               'pkt2t': pk_t2t.cpu().numpy()}
+        map_dict = {'mapi2t': float(mapi2t.cpu().numpy()),
+                    'mapt2i': float(mapt2i.cpu().numpy()),
+                    'mapi2i': float(mapi2i.cpu().numpy()),
+                    'mapt2t': float(mapt2t.cpu().numpy())}
 
-    map_dict = {'mapi2t': float(mapi2t.cpu().numpy()),
-                'mapt2i': float(mapt2i.cpu().numpy()),
-                'mapi2i': float(mapi2i.cpu().numpy()),
-                'mapt2t': float(mapt2t.cpu().numpy())}
+        print('   Test MAP: MAP(i->t) = {:3.4f}, MAP(t->i) = {:3.4f}, MAP(i->i) = {:3.4f}, MAP(t->t) = {:3.4f}'.format(mapi2t, mapt2i, mapi2i, mapt2t))
 
-    print('   Test MAP: MAP(i->t) = {:3.4f}, MAP(t->i) = {:3.4f}, MAP(i->i) = {:3.4f}, MAP(t->t) = {:3.4f}'.format(mapi2t, mapt2i, mapi2i, mapt2t))
-
-    path = 'checkpoints/' + opt.dataset + '_' + str(opt.bit) + str(opt.proc)
-    write_pickle(os.path.join(path, 'pr_dict.pkl'), pr_dict)
-    write_pickle(os.path.join(path, 'pk_dict.pkl'), pk_dict)
-    write_pickle(os.path.join(path, 'map_dict.pkl'), map_dict)
+        path = 'checkpoints/' + opt.dataset + '_' + str(opt.bit) + str(opt.proc)
+        write_pickle(os.path.join(path, 'pr_dict.pkl'), pr_dict)
+        write_pickle(os.path.join(path, 'pk_dict.pkl'), pk_dict)
+        write_pickle(os.path.join(path, 'map_dict.pkl'), map_dict)
 
 
 def generate_img_code(model, test_dataloader, num):
