@@ -2,13 +2,10 @@ import warnings
 
 
 class Default(object):
-    load_model_path = None  # load model path
-
-    pretrain_model_path = './data/imagenet-vgg-f.mat'
 
     flag = 'ucm'
 
-    batch_size = 128
+    batch_size = 256
     image_dim = 4096
     hidden_dim = 512
     modals = 2
@@ -61,7 +58,7 @@ class Default(object):
             self.query_size = 2605
             self.text_dim = 768
             self.image_dim = 4096
-            self.training_size = 50000
+            self.training_size = 30000
 
     def parse(self, kwargs):
         """

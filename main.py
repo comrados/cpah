@@ -145,8 +145,7 @@ def train(**kwargs):
             ###################################
 
             # adversarial loss, CPAH paper: (6)
-            # IMG is fake now
-            loss_adver = -torch.log(torch.sigmoid(model.dis_D(f_rc_img))).mean()  # don't detach from graph
+            loss_adver = -torch.log(torch.sigmoid(model.dis_D(f_rc_txt))).mean()  # don't detach from graph
 
             # consistency classification loss, CPAH paper: (7)
             f_r = torch.vstack([f_rc_img, f_rc_txt, f_rp_img, f_rp_txt])
@@ -162,24 +161,28 @@ def train(**kwargs):
 
             # pairwise loss, CPAH paper: (10)
             S = (labels.mm(labels.T) > 0).float()
-            theta = 0.5 * (h_img.mm(h_txt.T) + h_txt.mm(h_img.T))  # not completely sure
-            loss_pairwise = -torch.sum(S*theta - torch.log(1 + torch.exp(theta)))
-            #loss_pairwise = torch.tensor(0).to(opt.device)
+            # theta = 0.5 * ((h_img.mm(h_txt.T) + h_txt.mm(h_img.T)) / 2)  # not completely sure
+            theta = 0.5 * h_img.mm(h_txt.T)
+            #theta.retain_grad()
+            #theta.register_hook(lambda x: print("theta  :", torch.max(x), torch.min(x), torch.mean(x)))
+            e_theta = torch.exp(theta)
+            #e_theta.retain_grad()
+            #e_theta.register_hook(lambda x: print("theta  :", torch.max(x), torch.min(x), torch.mean(x)))
+            loss_pairwise = -torch.sum(S*theta - torch.log(1 + e_theta))
 
             # quantization loss, CPAH paper: (11)
             loss_quant = torch.sum(torch.pow(B[ind, :] - h_img, 2)) + torch.sum(torch.pow(B[ind, :] - h_txt, 2))
             #loss_quant = torch.tensor(0).to(opt.device)
 
-            err = loss_adver + opt.alpha * (loss_consistency_class + loss_class) + loss_pairwise + opt.beta * loss_quant
+            err = 100 * loss_adver + opt.alpha * (loss_consistency_class + loss_class) + loss_pairwise + opt.beta * loss_quant
 
-            e_losses['adv'] += loss_adver.detach().cpu().numpy()
+            e_losses['adv'] += 100 * loss_adver.detach().cpu().numpy()
             e_losses['class'] += (opt.alpha * (loss_consistency_class + loss_class)).detach().cpu().numpy()
             e_losses['pairwise'] += loss_pairwise.detach().cpu().numpy()
             e_losses['quant'] += loss_quant.detach().cpu().numpy()
 
-
             optimizer_gen.zero_grad()
-            err.backward(retain_graph=True)
+            err.backward()
             optimizer_gen.step()
 
             e_loss = err + e_loss
