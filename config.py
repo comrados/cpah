@@ -52,7 +52,7 @@ class Default(object):
             self.training_size = 5250
         if flag == 'rsicd':
             self.dataset = 'rsicd'
-            self.data_path = '/home/george/Downloads/RSICD_resnet18_bert_sum_12.h5'
+            self.data_path = './data/RSICD_resnet18_bert_sum_12.h5'
             self.db_size = 52000
             self.num_label = 31
             self.query_size = 2605
