@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -o /home/users/m/mikriukov/projects/cpah/out_gpu_short.log
-#SBATCH -J dadh
+#SBATCH -J cpah
 #SBATCH --ntasks=2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
