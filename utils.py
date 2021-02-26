@@ -3,6 +3,7 @@ import numpy as np
 import visdom
 import pickle
 from tqdm import tqdm
+from PIL import Image
 
 
 def calc_hamming_dist(B1, B2):
