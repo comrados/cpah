@@ -1,3 +1,7 @@
+# Important information
+
+_I'm not the author of the paper. Use the code at your own risk._ 
+
 # Multi-Task Consistency-Preserving Adversarial Hashing for Cross-Modal Retrieval
 
 DOI: 10.1109/TMM.2020.2969792
